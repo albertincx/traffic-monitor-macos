@@ -2,6 +2,8 @@
 
 A lightweight, 100% native **macOS Menu Bar & Dashboard app** that monitors internet traffic per process, per destination (IP & resolved hostname), and over time — with persistent SQLite history for **Session**, **24 Hours**, **7 Days**, **30 Days**, and **All Time**.
 
+![Traffic Monitor Dashboard](screenshot.png)
+
 ## Features
 
 - **100% Native macOS `.app` Bundle (Zero Dependencies)**:
