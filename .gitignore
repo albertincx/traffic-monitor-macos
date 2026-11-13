@@ -1,0 +1,5 @@
+.DS_Store
+*.swp
+*.zip
+build_output/
+Traffic Monitor.app/
