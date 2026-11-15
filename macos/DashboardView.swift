@@ -13,6 +13,9 @@ struct DashboardView: View {
     @State private var processes: [ProcessTrafficSummary] = []
     @State private var destinations: [DestinationTrafficSummary] = []
     @State private var timeline: [TimelineBucket] = []
+    @State private var selectedDestinationIDs: Set<DestinationTrafficSummary.ID> = []
+    @State private var copiedDestinationID: String? = nil
+    @State private var copiedAllDestinations: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -282,6 +285,18 @@ struct DashboardView: View {
                         .foregroundColor(.secondary)
                 }
                 Spacer()
+                if selectedProcess != nil && !filteredDestinations.isEmpty {
+                    Button(action: copyAllDestinations) {
+                        Label(
+                            L10n.t("copy_all_dests"),
+                            systemImage: copiedAllDestinations ? "checkmark" : "doc.on.doc"
+                        )
+                        .font(.caption)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(copiedAllDestinations ? .green : nil)
+                }
                 Text("\(filteredDestinations.count) \(L10n.t("active_dests").lowercased())")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -292,25 +307,37 @@ struct DashboardView: View {
 
             Divider()
 
-            Table(filteredDestinations) {
+            Table(filteredDestinations, selection: $selectedDestinationIDs) {
                 TableColumn(L10n.t("host_ip")) { dest in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(dest.displayHost)
-                            .font(.system(.body, weight: .medium))
-                            .lineLimit(1)
-                        HStack(spacing: 6) {
-                            if dest.hostname != nil && dest.hostname != dest.remoteIP {
-                                Text(dest.remoteIP)
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                            if selectedProcess == nil && !dest.processNames.isEmpty {
-                                Text(dest.processNames)
-                                    .font(.caption2)
-                                    .foregroundColor(.accentColor)
-                                    .lineLimit(1)
+                    HStack(spacing: 6) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(dest.displayHost)
+                                .font(.system(.body, weight: .medium))
+                                .lineLimit(1)
+                            HStack(spacing: 6) {
+                                if dest.hostname != nil && dest.hostname != dest.remoteIP {
+                                    Text(dest.remoteIP)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                if selectedProcess == nil && !dest.processNames.isEmpty {
+                                    Text(dest.processNames)
+                                        .font(.caption2)
+                                        .foregroundColor(.accentColor)
+                                        .lineLimit(1)
+                                }
                             }
                         }
+                        Spacer(minLength: 4)
+                        Button(action: {
+                            copyToClipboard(dest.displayHost, copiedID: dest.id)
+                        }) {
+                            Image(systemName: copiedDestinationID == dest.id ? "checkmark" : "doc.on.doc")
+                                .font(.caption)
+                                .foregroundColor(copiedDestinationID == dest.id ? .green : .secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help(L10n.t("copy_host"))
                     }
                     .padding(.vertical, 2)
                 }
@@ -353,6 +380,57 @@ struct DashboardView: View {
                     }
                 }
                 .width(min: 135, ideal: 155)
+            }
+            .textSelection(.enabled)
+            .contextMenu(forSelectionType: DestinationTrafficSummary.ID.self) { selectedIDs in
+                let selectedRows = filteredDestinations.filter { selectedIDs.contains($0.id) }
+                if let first = selectedRows.first {
+                    if selectedRows.count == 1 {
+                        Button(L10n.t("copy_host")) {
+                            copyToClipboard(first.displayHost, copiedID: first.id)
+                        }
+                        if first.hostname != nil && first.hostname != first.remoteIP {
+                            Button(L10n.t("copy_ip")) {
+                                copyToClipboard(first.remoteIP, copiedID: first.id)
+                            }
+                        }
+                        Button(L10n.t("copy_host_port")) {
+                            copyToClipboard("\(first.displayHost):\(first.remotePort)", copiedID: first.id)
+                        }
+                        Divider()
+                    }
+                    Button(L10n.t("copy_row")) {
+                        let text = selectedRows.map(formatDestinationRow).joined(separator: "\n")
+                        copyToClipboard(text)
+                    }
+                }
+            }
+        }
+    }
+
+    private func formatDestinationRow(_ d: DestinationTrafficSummary) -> String {
+        "\(d.displayHost)\t\(d.remoteIP)\t\(d.proto):\(d.remotePort)\t↑\(ByteFormatter.format(d.bytesOut))\t↓\(ByteFormatter.format(d.bytesIn))\t\(d.processNames)"
+    }
+
+    private func copyAllDestinations() {
+        let text = filteredDestinations.map(formatDestinationRow).joined(separator: "\n")
+        copyToClipboard(text)
+        copiedAllDestinations = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            copiedAllDestinations = false
+        }
+    }
+
+    private func copyToClipboard(_ text: String, copiedID: String? = nil) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        if let id = copiedID {
+            copiedDestinationID = id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                if copiedDestinationID == id {
+                    copiedDestinationID = nil
+                }
             }
         }
     }

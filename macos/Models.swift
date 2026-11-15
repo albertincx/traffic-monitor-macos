@@ -186,7 +186,13 @@ enum L10n {
         "active_procs": ("Processes", "Процессов"),
         "active_dests": ("Destinations", "Адресов"),
         "by_process_tab": ("By Process", "По процессам"),
-        "all_dests_tab": ("All Destinations", "Все направления")
+        "all_dests_tab": ("All Destinations", "Все направления"),
+        "copy": ("Copy", "Копировать"),
+        "copy_host": ("Copy Host", "Копировать хост"),
+        "copy_ip": ("Copy IP", "Копировать IP"),
+        "copy_host_port": ("Copy Host:Port", "Копировать хост:порт"),
+        "copy_row": ("Copy Row", "Копировать строку"),
+        "copy_all_dests": ("Copy All", "Копировать все")
     ]
 
     static func t(_ key: String) -> String {
