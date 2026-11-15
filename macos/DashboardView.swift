@@ -54,12 +54,20 @@ struct DashboardView: View {
 
             Spacer()
 
+            Toggle(L10n.t("hide_local"), isOn: Binding(
+                get: { monitor.excludeLocal },
+                set: { monitor.setExcludeLocal($0) }
+            ))
+            .toggleStyle(.checkbox)
+            .fixedSize()
+            .help(L10n.t("exclude_local"))
+
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.secondary)
                 TextField(L10n.t("search_placeholder"), text: $searchText)
                     .textFieldStyle(.plain)
-                    .frame(width: 190)
+                    .frame(width: 160)
                 if !searchText.isEmpty {
                     Button(action: { searchText = "" }) {
                         Image(systemName: "xmark.circle.fill")

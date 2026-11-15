@@ -26,6 +26,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
         TrafficMonitor.shared.excludeLocal = config.excludeLocal
         TrafficMonitor.shared.menuPeriod = TimeRange(rawValue: config.menuPeriod) ?? .day24h
+        TrafficMonitor.shared.onExcludeLocalChanged = { [weak self] newValue in
+            self?.config.excludeLocal = newValue
+            self?.saveConfig()
+            self?.rebuildMenu()
+        }
         TrafficMonitor.shared.onMenuDataUpdated = { [weak self] in
             self?.updateStatusButton()
             if self?.isMenuOpen == true {
@@ -350,7 +355,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
 
     @objc func toggleExcludeLocal() {
         config.excludeLocal.toggle()
-        TrafficMonitor.shared.excludeLocal = config.excludeLocal
+        TrafficMonitor.shared.setExcludeLocal(config.excludeLocal, notifyDelegate: false)
         saveConfig()
         rebuildMenu()
     }

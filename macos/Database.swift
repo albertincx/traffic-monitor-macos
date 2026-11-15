@@ -46,6 +46,15 @@ final class TrafficDatabase {
         execute("PRAGMA journal_mode=WAL;")
         execute("PRAGMA synchronous=NORMAL;")
 
+        sqlite3_create_function(db, "is_local_ip", 1, SQLITE_UTF8, nil, { ctx, argc, argv in
+            guard argc == 1, let arg = argv?[0], let cStr = sqlite3_value_text(arg) else {
+                sqlite3_result_int(ctx, 0)
+                return
+            }
+            let ip = String(cString: cStr)
+            sqlite3_result_int(ctx, TrafficMonitor.isLocalOrSpecialIP(ip) ? 1 : 0)
+        }, nil, nil)
+
         let createTrafficSQL = """
         CREATE TABLE IF NOT EXISTS traffic_hourly (
             bucket_ts INTEGER NOT NULL,
@@ -151,10 +160,11 @@ final class TrafficDatabase {
         return result
     }
 
-    func fetchProcessSummaries(sinceBucket: Int64) -> [ProcessTrafficSummary] {
+    func fetchProcessSummaries(sinceBucket: Int64, excludeLocal: Bool = false) -> [ProcessTrafficSummary] {
         var list: [ProcessTrafficSummary] = []
         queue.sync {
             guard let db = self.db else { return }
+            let localFilter = excludeLocal ? "AND is_local_ip(remote_ip) = 0" : ""
             let sql = """
             SELECT process_name,
                    SUM(bytes_in) as total_in,
@@ -162,7 +172,7 @@ final class TrafficDatabase {
                    MAX(last_seen) as last_active,
                    COUNT(DISTINCT remote_ip || ':' || remote_port) as dest_cnt
             FROM traffic_hourly
-            WHERE bucket_ts >= ?
+            WHERE bucket_ts >= ? \(localFilter)
             GROUP BY process_name
             ORDER BY (total_in + total_out) DESC;
             """
@@ -190,11 +200,12 @@ final class TrafficDatabase {
         return list
     }
 
-    func fetchDestinations(sinceBucket: Int64, processName: String?, dnsMap: [String: String]) -> [DestinationTrafficSummary] {
+    func fetchDestinations(sinceBucket: Int64, processName: String?, dnsMap: [String: String], excludeLocal: Bool = false) -> [DestinationTrafficSummary] {
         var list: [DestinationTrafficSummary] = []
         queue.sync {
             guard let db = self.db else { return }
             let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            let localFilter = excludeLocal ? "AND is_local_ip(t.remote_ip) = 0" : ""
             let sql: String
             if processName != nil {
                 sql = """
@@ -207,7 +218,7 @@ final class TrafficDatabase {
                        t.process_name
                 FROM traffic_hourly t
                 LEFT JOIN dns_cache d ON d.ip = t.remote_ip
-                WHERE t.bucket_ts >= ? AND t.process_name = ?
+                WHERE t.bucket_ts >= ? AND t.process_name = ? \(localFilter)
                 GROUP BY t.remote_ip, t.remote_port, t.proto
                 ORDER BY (total_in + total_out) DESC
                 LIMIT 500;
@@ -223,7 +234,7 @@ final class TrafficDatabase {
                        GROUP_CONCAT(DISTINCT t.process_name)
                 FROM traffic_hourly t
                 LEFT JOIN dns_cache d ON d.ip = t.remote_ip
-                WHERE t.bucket_ts >= ?
+                WHERE t.bucket_ts >= ? \(localFilter)
                 GROUP BY t.remote_ip, t.remote_port, t.proto
                 ORDER BY (total_in + total_out) DESC
                 LIMIT 500;
@@ -266,11 +277,12 @@ final class TrafficDatabase {
         return list
     }
 
-    func fetchTimeline(sinceBucket: Int64, bucketSeconds: Int64, processName: String?) -> [TimelineBucket] {
+    func fetchTimeline(sinceBucket: Int64, bucketSeconds: Int64, processName: String?, excludeLocal: Bool = false) -> [TimelineBucket] {
         var list: [TimelineBucket] = []
         queue.sync {
             guard let db = self.db else { return }
             let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            let localFilter = excludeLocal ? "AND is_local_ip(remote_ip) = 0" : ""
             let sql: String
             if processName != nil {
                 sql = """
@@ -278,7 +290,7 @@ final class TrafficDatabase {
                        SUM(bytes_in),
                        SUM(bytes_out)
                 FROM traffic_hourly
-                WHERE bucket_ts >= ? AND process_name = ?
+                WHERE bucket_ts >= ? AND process_name = ? \(localFilter)
                 GROUP BY grp_ts
                 ORDER BY grp_ts ASC;
                 """
@@ -288,7 +300,7 @@ final class TrafficDatabase {
                        SUM(bytes_in),
                        SUM(bytes_out)
                 FROM traffic_hourly
-                WHERE bucket_ts >= ?
+                WHERE bucket_ts >= ? \(localFilter)
                 GROUP BY grp_ts
                 ORDER BY grp_ts ASC;
                 """

@@ -152,6 +152,7 @@ enum L10n {
         "menu_period": ("Menu Top Period", "Период в меню"),
         "interval": ("Update Interval", "Интервал обновления"),
         "exclude_local": ("Internet Only (Exclude LAN/Loopback)", "Только интернет (без LAN/Loopback)"),
+        "hide_local": ("Hide localhost", "Скрыть localhost"),
         "show_speed_bar": ("Show Live Speed in Menu Bar", "Показывать скорость в статус-баре"),
         "keep_in_dock": ("Keep Icon in Dock", "Показывать иконку в Dock"),
         "language": ("Language", "Язык"),

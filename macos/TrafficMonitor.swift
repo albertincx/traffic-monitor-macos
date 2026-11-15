@@ -15,7 +15,7 @@ final class TrafficMonitor: ObservableObject {
     @Published var menuTotalIn: Int64 = 0
     @Published var menuTotalOut: Int64 = 0
 
-    var excludeLocal: Bool = true
+    @Published var excludeLocal: Bool = true
     var menuPeriod: TimeRange = .day24h
     let sessionStartTimestamp: Int64 = Int64(Date().timeIntervalSince1970)
 
@@ -36,8 +36,10 @@ final class TrafficMonitor: ObservableObject {
     private var sessionProcTotals: [String: (bytesIn: Int64, bytesOut: Int64, lastSeen: Int64, dests: Set<String>)] = [:]
     private var sessionDestTotals: [String: (ip: String, port: Int, proto: String, proc: String, bytesIn: Int64, bytesOut: Int64, firstSeen: Int64, lastSeen: Int64)] = [:]
     private var sessionTimeline: [Int64: (bytesIn: Int64, bytesOut: Int64)] = [:]
+    private var sessionInternetTimeline: [Int64: (bytesIn: Int64, bytesOut: Int64)] = [:]
 
     var onMenuDataUpdated: (() -> Void)?
+    var onExcludeLocalChanged: ((Bool) -> Void)?
 
     private init() {
         dnsCache = TrafficDatabase.shared.loadDnsCache()
@@ -49,11 +51,29 @@ final class TrafficMonitor: ObservableObject {
         }
     }
 
+    func setExcludeLocal(_ value: Bool, notifyDelegate: Bool = true) {
+        let apply = {
+            guard self.excludeLocal != value else { return }
+            self.excludeLocal = value
+            if notifyDelegate {
+                self.onExcludeLocalChanged?(value)
+            }
+            self.refreshMenuSummary()
+            self.revision += 1
+        }
+        if Thread.isMainThread {
+            apply()
+        } else {
+            DispatchQueue.main.async(execute: apply)
+        }
+    }
+
     func resetAllData() {
         stateLock.lock()
         sessionProcTotals.removeAll()
         sessionDestTotals.removeAll()
         sessionTimeline.removeAll()
+        sessionInternetTimeline.removeAll()
         stateLock.unlock()
 
         TrafficDatabase.shared.clearAllData()
@@ -80,27 +100,52 @@ final class TrafficMonitor: ObservableObject {
     // MARK: - Query API for UI
 
     func fetchProcesses(range: TimeRange) -> [ProcessTrafficSummary] {
+        let hideLocal = excludeLocal
         if range == .session {
             stateLock.lock()
-            let list = sessionProcTotals.map { (name, v) in
-                ProcessTrafficSummary(
-                    processName: name,
-                    bytesIn: v.bytesIn,
-                    bytesOut: v.bytesOut,
-                    lastSeen: v.lastSeen,
-                    destinationCount: v.dests.count
-                )
+            let list: [ProcessTrafficSummary]
+            if hideLocal {
+                var grouped: [String: (bytesIn: Int64, bytesOut: Int64, lastSeen: Int64, dests: Set<String>)] = [:]
+                for (_, entry) in sessionDestTotals {
+                    if Self.isLocalOrSpecialIP(entry.ip) { continue }
+                    var p = grouped[entry.proc] ?? (0, 0, entry.lastSeen, Set<String>())
+                    p.bytesIn += entry.bytesIn
+                    p.bytesOut += entry.bytesOut
+                    p.lastSeen = max(p.lastSeen, entry.lastSeen)
+                    p.dests.insert("\(entry.ip):\(entry.port)")
+                    grouped[entry.proc] = p
+                }
+                list = grouped.map { (name, v) in
+                    ProcessTrafficSummary(
+                        processName: name,
+                        bytesIn: v.bytesIn,
+                        bytesOut: v.bytesOut,
+                        lastSeen: v.lastSeen,
+                        destinationCount: v.dests.count
+                    )
+                }
+            } else {
+                list = sessionProcTotals.map { (name, v) in
+                    ProcessTrafficSummary(
+                        processName: name,
+                        bytesIn: v.bytesIn,
+                        bytesOut: v.bytesOut,
+                        lastSeen: v.lastSeen,
+                        destinationCount: v.dests.count
+                    )
+                }
             }
             stateLock.unlock()
             return list.sorted { $0.totalBytes > $1.totalBytes }
         } else {
             let since = range.sinceTimestamp ?? 0
             let sinceBucket = (since / 3600) * 3600
-            return TrafficDatabase.shared.fetchProcessSummaries(sinceBucket: sinceBucket)
+            return TrafficDatabase.shared.fetchProcessSummaries(sinceBucket: sinceBucket, excludeLocal: hideLocal)
         }
     }
 
     func fetchDestinations(range: TimeRange, processName: String?) -> [DestinationTrafficSummary] {
+        let hideLocal = excludeLocal
         stateLock.lock()
         let dnsSnapshot = dnsCache
         stateLock.unlock()
@@ -110,6 +155,7 @@ final class TrafficMonitor: ObservableObject {
             var grouped: [String: (ip: String, port: Int, proto: String, bytesIn: Int64, bytesOut: Int64, firstSeen: Int64, lastSeen: Int64, procs: Set<String>)] = [:]
             for (_, entry) in sessionDestTotals {
                 if let targetProc = processName, entry.proc != targetProc { continue }
+                if hideLocal && Self.isLocalOrSpecialIP(entry.ip) { continue }
                 let key = "\(entry.ip):\(entry.port):\(entry.proto)"
                 if var existing = grouped[key] {
                     existing.bytesIn += entry.bytesIn
@@ -140,26 +186,28 @@ final class TrafficMonitor: ObservableObject {
         } else {
             let since = range.sinceTimestamp ?? 0
             let sinceBucket = (since / 3600) * 3600
-            return TrafficDatabase.shared.fetchDestinations(sinceBucket: sinceBucket, processName: processName, dnsMap: dnsSnapshot)
+            return TrafficDatabase.shared.fetchDestinations(sinceBucket: sinceBucket, processName: processName, dnsMap: dnsSnapshot, excludeLocal: hideLocal)
         }
     }
 
     func fetchTimeline(range: TimeRange, processName: String?) -> [TimelineBucket] {
+        let hideLocal = excludeLocal
         if range == .session {
             if let proc = processName {
                 // Fall back to DB for per-process session timeline since sessionStartTimestamp
                 let sinceBucket = (sessionStartTimestamp / 3600) * 3600
-                return TrafficDatabase.shared.fetchTimeline(sinceBucket: sinceBucket, bucketSeconds: 3600, processName: proc)
+                return TrafficDatabase.shared.fetchTimeline(sinceBucket: sinceBucket, bucketSeconds: 3600, processName: proc, excludeLocal: hideLocal)
             }
             stateLock.lock()
-            let buckets = sessionTimeline.map { TimelineBucket(timestamp: $0.key, bytesIn: $0.value.bytesIn, bytesOut: $0.value.bytesOut) }
+            let source = hideLocal ? sessionInternetTimeline : sessionTimeline
+            let buckets = source.map { TimelineBucket(timestamp: $0.key, bytesIn: $0.value.bytesIn, bytesOut: $0.value.bytesOut) }
                 .sorted { $0.timestamp < $1.timestamp }
             stateLock.unlock()
             return buckets
         } else {
             let since = range.sinceTimestamp ?? 0
             let sinceBucket = (since / 3600) * 3600
-            return TrafficDatabase.shared.fetchTimeline(sinceBucket: sinceBucket, bucketSeconds: range.bucketSeconds, processName: processName)
+            return TrafficDatabase.shared.fetchTimeline(sinceBucket: sinceBucket, bucketSeconds: range.bucketSeconds, processName: processName, excludeLocal: hideLocal)
         }
     }
 
@@ -279,7 +327,7 @@ final class TrafficMonitor: ObservableObject {
                     let dOut = deltaValue(current: sock.bytesOut, previous: prevSock?.bytesOut)
 
                     if dIn > 0 || dOut > 0 {
-                        if excludeLocal && isLocalOrSpecialIP(sock.remoteIP) {
+                        if excludeLocal && Self.isLocalOrSpecialIP(sock.remoteIP) {
                             continue
                         }
                         sockSumIn += dIn
@@ -367,6 +415,13 @@ final class TrafficMonitor: ObservableObject {
                 tb.bytesIn += r.bytesIn
                 tb.bytesOut += r.bytesOut
                 sessionTimeline[r.bucketTs] = tb
+
+                if !Self.isLocalOrSpecialIP(r.remoteIP) {
+                    var itb = sessionInternetTimeline[r.bucketTs] ?? (0, 0)
+                    itb.bytesIn += r.bytesIn
+                    itb.bytesOut += r.bytesOut
+                    sessionInternetTimeline[r.bucketTs] = itb
+                }
             }
             stateLock.unlock()
         }
@@ -444,9 +499,15 @@ final class TrafficMonitor: ObservableObject {
         }
     }
 
-    private func isLocalOrSpecialIP(_ ip: String) -> Bool {
-        let lower = ip.lowercased()
-        if lower == "::1" || lower == "::" || lower == "0.0.0.0" { return true }
+    static func isLocalOrSpecialIP(_ ip: String) -> Bool {
+        var lower = ip.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let pctIdx = lower.firstIndex(of: "%") {
+            lower = String(lower[..<pctIdx])
+        }
+        if lower.hasPrefix("::ffff:") {
+            lower = String(lower.dropFirst("::ffff:".count))
+        }
+        if lower == "::1" || lower == "::" || lower == "0.0.0.0" || lower == "localhost" { return true }
         if lower.hasPrefix("fe80:") || lower.hasPrefix("ff") || lower.hasPrefix("fc") || lower.hasPrefix("fd") {
             return true
         }
